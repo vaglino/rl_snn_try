@@ -207,7 +207,7 @@ class SmallWorldSNN(nnx.Module):
         vm = state.vm + (-state.vm + I_syn) * (self.dt / self.tau)
         v_exc = jnp.maximum(0.0, vm - self.thresh)
         fired = (v_exc > 0).astype(jnp.bool_)
-        # fired = fired.at[:, -self.n_outputs :].set(False)
+        fired = fired.at[:, -self.n_outputs :].set(False)
 
         def apply_dropout(args):
             fired_in, v_exc_in, key_in = args
@@ -253,6 +253,8 @@ class ActorCriticVProp(nnx.Module):
             rngs=rngs,
         )
         self.value_head = nnx.Linear(SNN_OUTPUT, 1, rngs=rngs)
+        self.policy_head = nnx.Linear(SNN_OUTPUT, 3, rngs=rngs)
+
 
     def init_state(self, batch_size: int) -> VPropState:
         return self.snn.init_state(batch_size)
@@ -280,17 +282,36 @@ class ActorCriticVProp(nnx.Module):
         batch = frames.shape[0]
         state = self._prepare_state(state)
         frame_batch = frames.reshape((batch * INJECTIONS_PER_DECISION, 84, 84, 1))
+        ###
         encoded = self.encoder(frame_batch, training=training)
         encoded = encoded.reshape((batch, INJECTIONS_PER_DECISION, -1))
 
-        def feature_norm(feat):
-            mean = feat.mean(axis=-1, keepdims=True)
-            var = jnp.mean((feat - mean) ** 2, axis=-1, keepdims=True)
-            return (feat - mean) / jnp.sqrt(var + 1e-5)
+        # def feature_norm(feat):
+        #     mean = feat.mean(axis=-1, keepdims=True)
+        #     var = jnp.mean((feat - mean) ** 2, axis=-1, keepdims=True)
+        #     return (feat - mean) / jnp.sqrt(var + 1e-5)
 
-        encoded = feature_norm(encoded)
+        # encoded = feature_norm(encoded)
         currents = encoded.reshape((batch * INJECTIONS_PER_DECISION, -1)) @ self.snn.input_W.value
         currents = currents.reshape((batch, INJECTIONS_PER_DECISION, self.snn.n_hidden))
+        ###
+        # encoded = self.encoder(frame_batch, training=training)
+        # encoded = encoded.reshape((batch, INJECTIONS_PER_DECISION, -1))
+        
+        # # Project to hidden currents
+        # currents = encoded.reshape((batch * INJECTIONS_PER_DECISION, -1)) @ self.snn.input_W.value
+        # currents = currents.reshape((batch, INJECTIONS_PER_DECISION, self.snn.n_hidden))
+        
+        # # Light per-injection LayerNorm (no affine). Axis = hidden features only.
+        # def light_ln(x, eps=1e-5, target_rms=1.0):
+        #     mu = x.mean(axis=-1, keepdims=True)
+        #     var = jnp.mean((x - mu) ** 2, axis=-1, keepdims=True)
+        #     y = (x - mu) / jnp.sqrt(var + eps)
+        #     return y * target_rms
+        
+        # currents = light_ln(currents, eps=1e-5, target_rms=0.5)
+        ###
+        
         zero_current = jnp.zeros((batch, self.snn.n_hidden), dtype=currents.dtype)
         sequence = []
         for idx in range(INJECTIONS_PER_DECISION):
@@ -308,8 +329,10 @@ class ActorCriticVProp(nnx.Module):
 
         next_state, step_stats = lax.scan(body, state, (micro_currents, keys))
         avg_acc = next_state.acc / MICRO_STEPS_PER_DECISION
-        logits = avg_acc - avg_acc.mean(axis=1, keepdims=True)
-        value = self.value_head(avg_acc)
+        # logits = avg_acc - avg_acc.mean(axis=1, keepdims=True)
+        logits = self.policy_head(avg_acc)  # remove ad-hoc centering
+        value  = self.value_head(avg_acc)
+        
         reset_state = VPropState(
             syn_travel=next_state.syn_travel,
             syn_value=next_state.syn_value,

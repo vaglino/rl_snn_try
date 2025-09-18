@@ -48,7 +48,7 @@ def make_pong_env(seed: int, record_dir: Optional[str] = None) -> gym.Env:
     _ensure_ale_registered()
     make_kwargs = dict(
         frameskip=1,
-        repeat_action_probability=0.25,
+        repeat_action_probability=0.0,
         obs_type="rgb",
         full_action_space=False,
     )

@@ -25,16 +25,16 @@ from model import (
     INJECTIONS_PER_DECISION,
 )
 
-WINDOW_W = 32
-LEARN_TAIL_K = 32
+WINDOW_W = 16
+LEARN_TAIL_K = 16
 GAMMA_DEC = 0.99
 GAE_LAMBDA = 0.95
 LR = 1e-4
-ENTROPY_BETA = 0.03
+ENTROPY_BETA = 0.05
 VALUE_COEF = 0.5
 GRAD_CLIP = 10.0
 SEED = 42
-MAX_STEPS = 2_000
+MAX_STEPS = 30_000
 
 # Map policy action indices (0: stay, 1: up, 2: down) to environment action IDs.
 ACTION_MAP = np.array([0, 2, 3], dtype=np.int32)
@@ -110,11 +110,16 @@ def build_train_step(
         returns = advantages + values_seq
         advantages = jax.lax.stop_gradient(advantages)
         returns = jax.lax.stop_gradient(returns)
-        softmax_probs = jax.nn.softmax(logits_seq, axis=-1)
-        pi = (1.0 - BEHAVIOR_EPS) * softmax_probs + BEHAVIOR_EPS / logits_seq.shape[-1]
-        log_probs = jnp.log(pi + 1e-8)
+        # softmax_probs = jax.nn.softmax(logits_seq, axis=-1)
+        # pi = (1.0 - BEHAVIOR_EPS) * softmax_probs + BEHAVIOR_EPS / logits_seq.shape[-1]
+        # log_probs = jnp.log(pi + 1e-8)
+        # action_log_probs = jnp.take_along_axis(log_probs, actions[:, None], axis=-1).squeeze(-1)
+        # entropy = -(pi * log_probs).sum(axis=-1)
+        probs = jax.nn.softmax(logits_seq, axis=-1)
+        log_probs = jnp.log(probs + 1e-8)
         action_log_probs = jnp.take_along_axis(log_probs, actions[:, None], axis=-1).squeeze(-1)
-        entropy = -(pi * log_probs).sum(axis=-1)
+        entropy = -(probs * log_probs).sum(axis=-1)
+        
         mask = jnp.ones((tail_len,), dtype=jnp.float32)
         normalizer = mask.sum() + 1e-8
         policy_loss = -(mask * action_log_probs * advantages).sum() / normalizer
